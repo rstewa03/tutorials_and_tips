@@ -1,0 +1,1362 @@
+---
+title: "Analysis of RNAseq data"
+subtitle: "2024 Workshop on Genomics, Cesky Krumlov"
+author: "RA Steward"
+date: "updated 2024-01"
+output: 
+  html_document:
+    number_sections: true
+    code_folding: show
+    toc: true
+    toc_float: true
+    toc_collapsed: true
+    css: style.css
+toc_depth: 3
+bibliography: Tutorial_geneExpression_altSplicing_references.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, eval = FALSE) 
+```
+
+# Our system: diet plasticity in generalist butterflies
+
+Comma butterflies (_Polygonia c-album_) in Scandinavia can eat plants from several different families (Fig. 1). This kind of diet plasticity (generalization) is rare among herbivorous insects, butterflies in particular. The plants differ in both secondary chemistry and nutrition, suggesting that Comma larvae may use different molecular and physiological mechanisms to safely and efficiently metabolize tissue from these plants. We sequenced mRNA from the midguts of 4th instar larvae feeding on one of three different host plant genera: _Ribes_ (gooseberry), _Salix_ (willow) and _Urtica_ (nettle) (Fig. 2). 
+
+```{r, eval = T,echo = F, include = T, fig.height = 3, fig.cap="Fig. 1. Adult and larva of the Comma butterfly (© R. Tuinstra; © M. Flåten; https://commons.wikimedia.org)", fig.show='hold',fig.align='center'}
+library(knitr)
+library(gridExtra)
+library(grid)
+library(png)
+
+adult <- rasterGrob(readPNG("rmd_images/20160703_-_15.25_Gehakkelde_Aurelia_(Polygonia_c-album)_1.png"), interpolate=TRUE)
+larva <- rasterGrob(readPNG("rmd_images/Polygonia_c-album-larva.png"), interpolate=TRUE)
+
+
+grid.arrange(adult, larva, ncol=2)
+
+```
+
+```{r, eval = T,echo = F, include = T, fig.height = 3, fig.cap="Fig. 2. _P. c-album_ host plants: _Ribes uva-crispa_ (gooseberry), _Salix caprea_ (willow), and _Urtica dioica_ (nettle). (https://botany.cz/)", fig.show='hold',fig.align='center'}
+
+library(knitr)
+library(gridExtra)
+library(grid)
+library(png)
+
+Ribes <- rasterGrob(readPNG("rmd_images/Ribes_uva-crispa.png"), interpolate=TRUE)
+Salix <- rasterGrob(readPNG("rmd_images/Salix_caprea.png"), interpolate=TRUE)
+Urtica <- rasterGrob(readPNG("rmd_images/Urtica_dioica.png"), interpolate=TRUE)
+grid.arrange(Ribes, Salix, Urtica, ncol=3)
+
+```
+
+# Our questions
+
+1. Do patterns of gene expression differ between larvae reared on different host plants? 
+2. Which genes are differently expressed between larvae reared on different host plants?
+3. What are the functions of differentially expressed gene sets? 
+
+# Background
+
+Today's tutorial walks through a reference-based differential gene expression (DGE) analysis. This means our reads have been aligned to an existing reference genome for _P. c-album_, rather than a _de novo_ transcriptome generated from the RNA-seq data. The three main steps of reference-based DGE analysis are 1) alignment, 2) quantification and 3) analysis (Fig. 2). In this tutorial, we will focus on **step 3) analysis**. 
+
+This tutorial has three units:  
+
+ - **Exploring patterns of gene expression among samples **
+ - **Identifying differentially expressed genes**
+ - **Evaluating functional enrichment of DE gene sets**
+ 
+Each unit has core exercises you should try to finish during the lab. If you finish the core exercises, there are additional challenge exercises at the end of each unit. 
+
+:::: {.bluebox data-latex=""}
+Occasional blue boxes give background on the analyses. Feel free to gloss over these -- you can come back to them later if you are curious or want to learn more. 
+::::
+
+# Unit 1: Exploring patterns of gene expression among samples
+
+Everything in this tutorial will be done in **RStudio**. 
+
+## Set the working directory
+Open RStudio and start by checking (`getwd()`) and setting (`setwd()`) your working directory. The activity is designed to be run in the `RNAseq_analysis" directory. 
+
+```{r, eval = F, class.source = "fold-hide"}
+#check your wd
+getwd()
+
+# if needed, set your wd. the activity is designed to be run in your main directory (aka $RNA_HOME from above)
+setwd("/home/genomics/workshop_materials/RNAseq_analysis/")
+```
+
+Alternatively, you can set the working directory using the RStudio interface. Click on the `Files` tab. Navigate by clicking on the directories you want to enter (`workshop_materials`, then `RNAseq_analysis`). Once inside the working directory, use the `More` drop-down menu (next to the little blue gear) and select `Set As Working Directory`. 
+
+Take a look at the contents of the directory and subdirectory. You can do this using the `list.files()` command with the `recursive = T` option. or by selecting `Go To Working Directory` from the `More` drop-down menu on the `Files` tab. 
+
+```{r, eval = F, class.source = "fold-hide"}
+list.files(recursive = T)
+```
+
+The number of reads aligning to each gene can be found in the count file **diff_expr/Pcal_gene_counts.tsv**.
+Information about the samples can be found in the sample data file **sampledata/Pcal_sampledata.tsv**. 
+
+The remaining folders contain sequences and other reference files that will not be used in this tutorial. 
+
+## Install and load packages
+
+Our analysis will rely on several packages. 
+
+- `DESeq2`: differential gene expression analysis
+- `topGO`: gene set enrichment anlaysis
+- `magrittr`, `dplyr`, `tidyr`, `readr`, `tibble`: data wrangling 
+  - (or load the full `tidyverse`, if you prefer)
+- `ggplot2`, `RColorBrewer`, `Rgraphviz`: visualizations
+
+Luckily, they have already been installed on the virtual machine, so no need to install them now. 
+
+```{r, eval = F, echo = F, include=FALSE}
+# install packages
+if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+if (!requireNamespace("DESeq2", quietly = TRUE)) BiocManager::install("DESeq2")
+if (!requireNamespace("topGO", quietly = TRUE)) install.packages("topGO")
+
+```
+
+```{r, eval = T, echo = T, include = F, class.source = "fold-hide"}
+# load libraries
+myLib <- as.vector(c("DESeq2","topGO", "magrittr", "dplyr","tidyr", "readr", "tibble", "ggplot2", "forcats", "RColorBrewer", "Rgraphviz"))
+
+lapply(myLib,library,character.only=TRUE)
+```
+
+Use `library()` or `require()` to load the necessary packages. 
+
+```{r, message=FALSE, class.source = "fold-hide"}
+# load libraries
+library("DESeq2") 
+
+# Or better yet, create a vector of the necessary packages and load them using lapply 
+myLib <- as.vector(c("DESeq2","topGO", "magrittr", "dplyr","tidyr", "readr", "tibble", "ggplot2", "forcats", "RColorBrewer"))
+
+lapply(myLib,library,character.only=TRUE )
+```
+
+## The data
+
+### Load the sample data
+
+Remember that we are comparing expression among larvae feeding on different host plants (in the column `condition`). We also evenly sampled larvae from three different families. **First, load the sample data into the working environment.** You can use different packages and functions to do this, but we will use `readr::read_tsv()`. 
+
+```{r, eval = T}
+# readr::read_tsv() to load the sample data
+Pcal_sampledata <- read_tsv("sampledata/Pcal_sampledata.tsv", 
+                          col_types = c("ccfff"))
+
+# here we specify the column types using a condensed string, one letter for each column. 
+# 'c' stands for character, 'f' for factor
+```
+
+**Optional**: Inspect the sample data using `str()`, `head()` and `summary()`. Alternatively, click on `Pcal_sampledata` in the `Environment` tab of the RStudio interface. 
+
+```{r, eval = F,  class.source = "fold-hide"}
+str(Pcal_sampledata)
+head(Pcal_sampledata)
+summary(Pcal_sampledata)
+unique(Pcal_sampledata$sampleName) %>% length()
+```
+
+We have three individuals in each family-condition combination.
+
+```{r, eval = T}
+table(Pcal_sampledata[3:4])
+```
+This is a little slim for a differential expression analysis. Many DGE tools, including `DESeq2` recommend 7 or more samples in each group. Therefore, we are going to stick with looking at differences between host plants (`condition`) in this activity.
+
+### Load the count data
+
+Load the count data into the working environment and convert it into a matrix.   
+
+```{r}
+# load gene count data, convert the column gene_id to row names, convert to a matrix
+Pcal_counts <- read_tsv("diff_expr/Pcal_gene_counts.tsv") %>% 
+  column_to_rownames("gene_id") %>% 
+  as.matrix()
+```
+
+The count matrix was made using an annotation of the _P. c-album_ genome with 
+Double check that the column names of the count matrix match the sample names in our sample data frame. 
+
+```{r}
+# compare matrix column names with sample names
+colnames(Pcal_counts) %in% Pcal_sampledata$sampleName
+```
+
+All of the values should be `TRUE`. 
+
+### Create the DESeq object
+
+Now we create the data object necessary for `DESeq2` to analyze the data.
+
+:::: {.bluebox data-latex=""}
+Some R packages (esp. Bioconductor packages) define and use custom classes within R for storing data (input data, intermediate data and also results). These custom data structures are similar to lists in that they can contain multiple different data types/structures within them. Unlike lists, they have pre-specified data slots to hold specific types or classes of data. The data stored in these pre-specified slots can be accessed using functions designed and implemented specifically for the package. 
+::::
+
+To create the `DESeqDataSet` object, we will need the count matrix (`Pcal_counts`) and the sample data frame (`Pcal_sampledata`) as input. 
+
+We will also need to specify a **design formula**. The design formula describes how the column(s) in the sample data frame should be used in the analysis. For our data, we only have one column we are interested in: `condition.` The design `~ condition` tells `DESeq2` that we want to evaluate gene expression change with respect to the three different levels of this variable.
+
+Create the `DESeqDataSet` (aka `dds`) object:
+
+```{r}
+Pcal_dds <- DESeqDataSetFromMatrix(countData = Pcal_counts, 
+                              colData = Pcal_sampledata, 
+                              design = ~ condition)
+# Take a look:
+Pcal_dds
+```
+
+:::: {.bluebox data-latex=""}
+If you check out some of the other DESeq2 import functions with `help("DESeqDataSet-class")`, you can see that `DESeq2` has a function to import `HTSeq` count files directly (`DESeqDataSetFromHTSeqCount`) which can streamline your pipeline a bit. Or, if you have used a pseudo-aligner like Salmon and have transcript abundance estimates, these can also be imported directly (`DESeqDataSetFromTximport`). 
+::::
+
+## Normalization
+
+There can be **systematic biases** in RNA sequencing data, such as differences in total sequencing depth between samples. We need to adjust the count data for such systematic biases in a process called normalization. 
+
+:::: {.bluebox data-latex=""}
+
+### Optional filtering
+
+DGE analysis is designed to deal with count data that is highly variable among samples and genes. However, it is sometimes a good idea to remove genes that are very rarely expressed _before_ you start your analysis. This can:
+
+- improve model fit
+- reduce the number of multiple comparisons (see below). 
+
+It is not a required step and tools like `DESeq2` can handle the data without filtering first, but it is something to consider. Here, we will set a filter based on an fixed threshold: keep only those genes with at least 5 reads in at least 3 samples. 
+
+```{r}
+# determine whether genes meet our threshold
+keep <- rowSums(counts(Pcal_dds) >= 5 ) >= 9
+
+# filter the dds object to keep genes that meet the threshold
+Pcal_dds_filt <- Pcal_dds[keep,]
+
+# if you plan to use the filtered data set, make sure you use the filtered dds object in the following analysis
+```
+
+How many genes did not meet the filtering criteria? 
+
+```{r, eval = F,  class.source = "fold-hide"}
+# check the number of genes that meet our threshold (== TRUE)
+table(keep)
+```
+
+::::
+
+### Normalize the counts within the `dds` object
+
+The main factors considered during normalization are sequencing depth and RNA composition. `DESeq2` uses the _Median of Ratios normalization_ (MRN) method. If you're interested, you can find a detailed explanation of how MRN is calculated in the supplementary slides of the presentation. Here are the basic steps: 
+
+1. A pseudo-reference sample is created for each gene by taking the rowwise geometric mean. 
+2. The ratio is calculated of each sample in relation to this pseudo-reference.
+3. A normalization factor (aka **size factor**) is calculated from the median value of all ratios for each column. 
+4. Normalized count values are calculated using the normalization factor. 
+
+Estimate the size factors for each sample:
+
+```{r}
+# Estimate the size factors
+Pcal_dds <- estimateSizeFactors(Pcal_dds) 
+sizeFactors(Pcal_dds) # Check the size factors 
+```
+
+Based on the size factor calculated for Pcal_Ribes_rep6, were read counts in this sample systematically lower or higher than expected?
+
+## Unsupervised clustering 
+
+Now that we have the normalized counts, we can perform quality control and exploratory analysis using unsupervised clustering. These analyses include _Principal Component Analysis_ (PCA) and _hierarchical clustering_. 
+
+:::: {.bluebox data-latex=""}
+PCA is a technique used to emphasize variation and bring out strong patterns in the data. We expect to see biological replicates belonging to the same experimental group to cluster together. 
+
+Hierarchical clustering also groups samples by expression similarity. A hierarchical tree indicates which samples are more similar to each other based on the normalized gene expression values. A heatmap is used to show the correlation of gene expression for all pairwise combinations of samples in the data. Clustering of samples in the hierarchical clustering analysis should be similar to clustering in the PCA. 
+::::
+
+### Transformation
+
+When using unsupervised clustering methods, transformation of the normalized counts improves the estimated correlations or distances between samples or genes for visualization. `DESeq2` recommends a variance-stabilizing transformation (`vst()`) of the normalized counts.
+
+```{r}
+# Transform the data using the variance-stabilizing transformation
+Pcal_vst <- vst(Pcal_dds, blind=TRUE)
+```
+
+:::: {.bluebox data-latex=""}
+Here we have set blind to `TRUE` because we want the transformation to be performed without considering the design formula of the `dds` object. If conditions are expected to be VERY different in their total counts, it is a good idea to change this to `blind == FALSE`.  For example, a pupa in the middle of winter is performing few physiological processes other than homeostasis and has very low transcription. In contrast, a pupa that is right about to emerge as an adult butterfly is undergoing massive morphological and physiological changes and has much higher levels of transcription. In this case, it is better to use `blind == FALSE`. 
+::::
+
+### Principal component analysis
+
+Create a PCA using the `DESeq2` function `plotPCA()`. We will focus on the 1000 most variable genes (~10% of expressed genes) by setting the option `ntop = 1000`. The default is 500. 
+
+```{r}
+# PCA plot
+plotPCA(Pcal_vst, intgroup=c("condition"), ntop = 1000)
+
+# plotPCA depends on ggplot2, so we can spice it up a bit:
+plotPCA(Pcal_vst, intgroup=c("condition"), ntop = 1000) +
+  theme_bw() +
+  scale_color_brewer(palette = "Dark2", name = "Host plant") +
+  theme(legend.text = element_text(face = "italic"))
+
+# save your plot
+ggsave("output/Pcal_vst_PC1_PC2.pdf", height = 6, width = 6)
+```
+
+_Hint: If you don't like using the `DESeq2::plotPCA()` function and want to use a one that might be a little more customizable (e.g., `stats::prcomp()` or `FactoMineR::PCA()`), you can extract the normalized, transformed values using `assay(Pcal_vst)`._ 
+
+### Hierarchical clustering
+
+Here, we are going to visualize which samples cluster together when using all of the filtered, normalized and transformed expression data. Start by creating a distance matrix among samples using `stats::dist()`.
+
+```{r}
+# Create the distance matrix
+Pcal_vst_dists <- dist(t(assay(Pcal_vst)))
+Pcal_vst_mat <- as.matrix(Pcal_vst_dists)
+```
+
+Now, run the clustering analysis on the samples using the function `stats::hclust()`.
+
+```{r}
+# run clustering analysis
+Pcal_vst_hc <- hclust(Pcal_vst_dists)
+```
+
+Visualize the distance between samples using a heatmap and show the clustering of samples using a dendrogram. Here we will use the package `pheatmap`, but `ComplexHeatmap` is also great. 
+
+```{r}
+# create a color palette
+hmcol <- colorRampPalette(brewer.pal(9, "GnBu"))(100) 
+
+# Plot the heatmap
+Pcal_hm <- heatmap(Pcal_vst_mat, 
+        Rowv=as.dendrogram(Pcal_vst_hc), 
+        symm=TRUE,
+        col = rev(hmcol),
+        margin=c(13, 13), 
+        cexRow = 0.75,
+        cexCol = 0.75) 
+
+```
+
+Save the heatmap using the pdf device (`pdf()`). Unfortunately, `pheatmap` does not produce ggplot objects, so cannot be saved directly with `ggsave()`. 
+
+```{r, class.source = "fold-hide"}
+# save the heatmap
+pdf(file = "output/Pcal_vst_sampleHeatmap.pdf", height = 6, width = 6)
+heatmap(Pcal_vst_mat, 
+        Rowv=as.dendrogram(Pcal_vst_hc), 
+        symm=TRUE,
+        col = rev(hmcol),
+        margin=c(13, 13), 
+        cexRow = 0.75,
+        cexCol = 0.75) 
+dev.off()
+
+```
+
+_Hint: note that `pheatmap` condenses the column and row axis labels. Don't be worried if you can only see a fraction of your samples. Instead, save your figure at a large enough scale that all of your samples are shown in the axis labels._
+
+## Challenge exercises
+
+### Create a PCA biplot
+
+How can we make the PCA more informative? One option is to add vectors that represent the major genes that contribute to the position of samples in principal component space. 
+
+`DESeq2::plotPCA` is a wrapper that both calculates and plots the PCs, which makes it difficult to pull additional information. We can recreate the PCA results on our own.
+
+First, extract the normalized values from the `dds` object using the `DESeq2` function `assay()`, calculate the variances with `var()` and subset the top 1000 most variable genes. 
+
+```{r, class.source = "fold-hide"}
+ntop = 1000
+
+Pcal_vst_mat <- assay(Pcal_vst)
+Pcal_vst_ntop_names <-names(sort(apply(Pcal_vst_mat, 1, var), decreasing = T))[1:ntop]
+Pcal_vst_ntop <- t(Pcal_vst_mat[Pcal_vst_ntop_names,])
+```
+
+Calculate the principal components of the top 1000 genes with the `stats` function `prcomp()`. 
+
+```{r, class.source = "fold-hide"}
+# calculate principal components
+Pcal_vst_pca <- prcomp(Pcal_vst_ntop)
+
+# make sure they match the PCA you made with plotPCA by looking at the summary of the PCA object. Does the proportion of the variance explained by PC1 match the % on the x axis from earlier?
+summary(Pcal_vst_pca)
+
+```
+
+Pull the proportion of the variance for the first and second PC axes from the `summary()` object.  
+
+```{r, class.source = "fold-hide"}
+pc1_prop <- summary(Pcal_vst_pca)$importance[2,1]
+pc2_prop <- summary(Pcal_vst_pca)$importance[2,2]
+```
+
+Create a data frame of principal component values for each sample, which can be found in `Pcal_vst_pca$x`. Join the sample data to the data frame (e.g., using `tidyr::left_join`). 
+
+```{r, class.source = "fold-hide"}
+Pcal_vst_pca_df <- as.data.frame(Pcal_vst_pca$x) %>%
+  rownames_to_column(var = "sampleName") %>% 
+  left_join(dplyr::select(Pcal_sampledata, sampleName, condition, family)) 
+```
+
+Create a data frame of loadings for each gene, which can be found in `Pcal_vst_pca$rotation`. Subset the data frame to focus on 10 most variable genes (use the `Pcal_vst_ntop_names` vector we made before).
+
+```{r, class.source = "fold-hide"}
+Pcal_vst_pca_loadings <- as.data.frame(Pcal_vst_pca$rotation[Pcal_vst_ntop_names,])%>%
+  rownames_to_column(var = "geneID") %>% 
+  head(10)
+```
+
+Now we can build a plot with both of these data frames. We will multiply the gene loadings by 200 so they are visible on the same scale as the sample points.
+
+```{r, class.source = "fold-hide"}
+ggplot() +
+  geom_point(data = Pcal_vst_pca_df,
+             aes(x = PC1, y = PC2, color = condition, shape = family)) +
+  geom_segment(data = Pcal_vst_pca_loadings,
+               aes(x=0, y=0, xend=PC1*200, yend=PC2*200), 
+               arrow = arrow(length=unit(0.5, 'cm')), color = "red") +
+  annotate(geom = "text", 
+           label = Pcal_vst_pca_loadings$geneID,
+           x = Pcal_vst_pca_loadings$PC1*200, y = Pcal_vst_pca_loadings$PC2*200, 
+           size = 3)+
+  theme_bw() +
+  labs( x = paste0("PC1 (", signif(pc1_prop*100,3), "%)"), 
+        y = paste0("PC1 (", signif(pc1_prop*100,3), "%)")) +
+  scale_color_brewer(palette = "Dark2", name = "Host plant") +
+  theme(legend.text = element_text(face = "italic"))
+
+# here I added shape = family as an option within the geom_point aesthetic just to check that PC1 isn't a genetic difference
+
+```
+
+```{r, class.source = "fold-hide", eval = F, echo = F}
+Pcal_vst_pca_loadings$geneID
+
+## PC2 "Polcal_g14940" Not found
+## PC2 "Polcal_g15160" DNA/RNA non-specific endonuclease
+# PC1 "Polcal_g8779" Sugar (and other) transporter
+## PC2 "Polcal_g14939" Not found
+## PC2 "Polcal_g14918" Not found
+## PC2 "Polcal_g9946" Trypsin like serine protease
+# PC1 "Polcal_g6597" No annotated name, function
+# PC1 "Polcal_g4875"  Fatty acid hydroxylase superfamily
+# PC1 "Polcal_g14181" Sulfotransferase family
+# PC1 "Polcal_g8090" N-acetylmuramoyl-L-alanine amidase PGRPLB
+# PC1 "Polcal_g5945"  Zinc-dependent metalloprotease
+# PC1 "Polcal_g9282"  No annotated name, function
+# PC1 "Polcal_g16737" Not found
+# PC1 "Polcal_g2742"   No annotated name, function
+# PC2 "Polcal_g6781" DM4/DM12 family
+```
+### Create a multidimensional scaling plot (MDS) 
+
+While PCA is a common and widely used dimension reduction analysis in RNAseq data analysis. But, it makes a lot of assumptions about the data structure that aren't always correct. 
+
+
+```{r, class.source = "fold-hide"} 
+library(vegan)
+ntop = 1000
+
+Pcal_vst_mat <- assay(Pcal_vst)
+Pcal_vst_ntop_names <-names(sort(apply(Pcal_vst_mat, 1, var), decreasing = T))[1:ntop]
+Pcal_vst_ntop <- t(Pcal_vst_mat[Pcal_vst_ntop_names,])
+
+Pcal_vst_ntop_dist <- vegdist(Pcal_vst_ntop)
+Pcal_vst_ntop_mds <- monoMDS(Pcal_vst_ntop_dist, model = "loc") 
+Pcal_vst_ntop_mds_df <- Pcal_vst_ntop_mds$points %>% 
+  as.data.frame() %>% 
+  rownames_to_column("sampleName") %>% 
+  left_join(Pcal_sampledata)
+
+ggplot(Pcal_vst_ntop_mds_df, aes(x = MDS1, y = MDS2) ) +
+  geom_point(aes(color = condition, shape = family)) +
+  theme_bw()
+
+# here I added shape = family as an option within the geom_point aesthetic just to check that PC1 isn't a genetic difference
+
+```
+
+# Unit 2: Differential gene expression analysis
+
+Now that we have checked our samples for outliers and explored patterns of clustering using dimension reduction and clustering, we will conduct **differential expression analysis**. To run the actual analysis, we use the function `DESeq()`. It performs the normalization of the counts using the size factors, estimates dispersion, and fits the linear model. Run `DESeq2()` on the `dds` object. Use the assign arrow (`<-`) to replace the old `dds` object with the newly fitted object.
+
+```{r, class.source = "fold-hide"}
+# Run the analysis on the filtered read counts
+Pcal_dds <- DESeq(Pcal_dds)
+```
+
+By re-assigning the results of the function back to the same variable name (`Pcal_dds`), we can fill in the slots of our `DESeqDataSet` object with the new values calculated by `DESeq2`.
+
+## Identifying DE genes
+
+With `DESeq2`, the *Wald test* is commonly used for hypothesis testing when comparing two groups. To indicate to `DESEq2` the two groups we want to compare, we provide **contrasts**, or the specific pair of groups we want to test. 
+
+First, we have to check what contrasts are possible given our data and design formula. 
+
+```{r}
+# check what contrasts are even possible
+resultsNames(Pcal_dds)
+```
+
+_Ribes_ is currently set as the base level in our variable `condition`, so `DESeq2` automatically compares the remaining two levels back to _Ribes_. 
+
+**Extract the results for _Urtica_ vs. _Ribes_**. 
+
+```{r}
+# specify the contrast by naming the factor you want to test 
+# and the levels of the factor you want to compare.
+contrast_U_R <- c("condition", "Urtica", "Ribes")
+
+# extract the results for your specified contrast
+Pcal_res_table_U_R <- results(Pcal_dds, contrast=contrast_U_R)
+
+# this can alternatively be written using the names of the contrasts 
+Pcal_res_table_U_R <- results(Pcal_dds, name = "condition_Urtica_vs_Ribes") # do not run this code, the results are the same as the previous line
+```
+
+
+A Wald test statistic is computed per-gene, and evaluates the probability that a test statistic at least as extreme as the observed value would occur at at random. We reject the null hypothesis (i.e. there is no difference in expression between groups) and conclude a gene is differentially expressed when the calculated p-value is below our significance threshold (usually 0.05). 
+
+```{r}
+# sort results based on the padj
+Pcal_res_table_U_R <- Pcal_res_table_U_R[order(Pcal_res_table_U_R$padj),]
+
+# You will now have the smallest padj values at the top of your table
+head(Pcal_res_table_U_R)
+
+# save your results 
+write_tsv(as.data.frame(Pcal_res_table_U_R), "output/Pcal_res_table_U_R.tsv")
+```
+
+The column headers are: 
+
+- `baseMean`: mean of normalized counts for all samples
+- `log2FoldChange`: log2 fold change or LFC
+- `lfcSE`: standard error of log2 fold change
+- `stat`: the Wald test statistic
+- `pval`: Wald test p-value
+- `padj`: Benjamini-Hochberg (BH) adjusted p-values
+
+We will use adjusted p-value to identify significantly differentially expressed genes. We can use additional thresholds, like log2 fold change (LFC), to identify DE genes. A common threshold is an absolute LFC of 1, which means expression of that gene is twice as much in one of the conditions compared to the other. 
+
+:::: {.bluebox data-latex=""}
+Note that we have p-values (`pval`) and adjusted p-values (`padj`) in the output. When we use the p-values and a significance threshold of 0.05, we are likely making a wrong conclusion (for example, believing a gene is significantly differentially expressed) for 1 out of every 20 genes. Now, what if we are testing 100 genes? We are probably making ~5 wrong conclusions. 10,000 genes? ~500 wrong conclusions. Adjusting the p-values to account for testing multiple genes helps us to have more confidence in our conclusions. 
+::::
+
+## Visualizing DE genes
+
+### Individual genes
+
+To make sure we understand the results, it is good to start by looking at a single gene. Inspect the gene that is _most_ differentially expressed (i.e., lowest padj) in the sorted results table using `head()`.
+
+```{r}
+head(Pcal_res_table_U_R, 1)
+```
+
+Is it up or down-regulated in larvae feeding on _Ribes_ compared to _Urtica_? It can be hard to tell from the results tabe alone. We can use `DESeq2::plotcounts()` on the `dds` object to visualize differences in expression for larvae on different host plants. Make sure to use the option `gene=` to identify the gene of interest, and `intgroup = "condition"` to plot expression by host plant on the x-axis.
+
+```{r}
+plotCounts(Pcal_dds, gene="Polcal_g14648", intgroup="condition")
+```
+
+From this plot, we can see that the top expressed gene (which had an LFC of -7.88699 in the results table) is expressed at lower levels on _Urtica_ than on _Ribes_. This tells us that genes with negative LFC values and significant adjusted p-values (based on our chosen cutoff) are likely to be downregulated on _Urtica_ and upregulated on _Ribes_. 
+
+Thus, we can think of the contrast `c("condition", "Urtica", "Ribes")` as asking the question `How does _Urtica_ (condition 1) differ relative to _Ribes_ (condition 2), which should help when trying to specify your own contrasts. 
+
+### All genes:  MA plot 
+
+The MA plot shows the mean of the normalized counts (x-axis) versus the LFC (y-axis) for all genes. Genes that are significantly differentially expressed are colored to be easily identified. The default significance threshold is 0.05, but today let's use **p < 0.01** to be a little more conservative. Remember, negative LFC values mean the genes are less expressed in _Urtica_!
+
+To make an MA plot directly from the `DESeq` object, we use the function `plotMA()`. Use `??DESeq2::plotMA` to figure out how create this plot. 
+
+```{r, class.source = "fold-hide"}
+# MA plot needs the dds object
+plotMA(object = Pcal_dds, 
+       ylim=c(-2,2), 
+       alpha = 0.01)
+
+```
+
+_Note that the triangles show genes that fall outside of our y axis limits. Try changing the `ylim` values to see how the number of triangles changes._
+
+**Extra challenge**: build the plot in ggplot instead. _Quick reminder: the results table is a `DESeqResults` object, but ggplot() requires a dataframe. Convert your results table to a dataframe (`as.data.frame()`) before using it in ggplot._
+
+
+```{r, class.source = "fold-hide"}
+
+# ggplot option
+ggplot(as.data.frame(Pcal_res_table_U_R), aes(x = log(baseMean), y = log2FoldChange)) +
+  geom_point(aes(color = padj < 0.01), size = 0.5) +
+  scale_color_manual(values = c("grey", "blue"))+
+  theme_bw()
+# ggsave option
+ggsave("output/Pcal_MAplot_U_R.pdf", height = 6, width = 6)
+```
+
+Once you're happy with it, save your plot using the `pdf()` device or `ggsave()`. 
+
+:::: {.bluebox data-latex=""}
+This plot allows us to evaluate the magnitude of fold changes and how they are distributed relative to mean expression. Generally, we would expect to see significant genes across the full range of expression levels. Do you observe this in your plot? 
+
+When within-group variation is high, LFC values can be a little misleading. Just look at all the nonsignificant genes with very high or low LFC in our MA and volcano plots. In this example data set, you have lots of genes with very small count numbers (between 0 to 10) that also have large log2fold changes (>1). Using `DESeq2`, there is a way to shrink the log2 fold change for genes with low counts so that you can have more confidence in the fold change estimates. You can have a look on  documentation and read about log2 fold change shrinkage. 
+::::
+
+### All genes: Volcano plot
+
+The volcano plot builds on the MA plot by visualizing the relationship between LFC (x-axis) and padj (-log10-transformed (`-log10(padj)`) on the y-axs). Use `ggplot()` and `geom_point()` to create a volcano plot. 
+
+_Quick reminder: the results table is a `DESeqResults` object, but ggplot() requires a dataframe. Convert your results table to a dataframe (`as.data.frame()`) before using it in ggplot._
+
+```{r, class.source = "fold-hide"}
+ggplot(as.data.frame(Pcal_res_table_U_R), 
+       aes(x = log2FoldChange, y = -log10(padj))) +
+ geom_point()
+```
+
+#### Make it fancy!
+
+We can make this plot _much_ more informative to readers. 
+
+- Use `geom_hline()` to add a dashed horizontal line at our significance threshold (p = 0.01, but don't forget the adjusted p-values are -log10-transformed!) 
+- Use `geom_vline()` to add dashed vertical lines at our LFC threshold (-1 and 1)
+- **Extra challenge:** Color the points by whether they are significantly DE or not
+  - you can do this by creating a new variable in the results table or by changing how you plot the points within ggplot. 
+
+```{r, class.source = "fold-hide"}
+# option 1
+Pcal_res_df_U_R <- Pcal_res_table_U_R %>% 
+  as.data.frame() %>% 
+  mutate(sigDE = if_else(padj < 0.01 & abs(log2FoldChange) > 1 , "sig", "nsig")) 
+
+ggplot(as.data.frame(Pcal_res_df_U_R), aes(x = log2FoldChange, y = -log10(padj))) +
+ geom_point(aes(color = sigDE)) +
+  scale_color_manual(values = c("grey", "blue"))+
+  geom_hline(yintercept = -log10(0.01), linetype = "dashed")+
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
+  theme_bw()
+
+## option 2
+ggplot() +
+  geom_point(
+    data = as.data.frame(Pcal_res_table_U_R) %>% 
+      filter(padj > 0.01 | abs(log2FoldChange) < 1), 
+    aes(x = log2FoldChange, y = -log10(padj)),
+    color = "grey") +
+  geom_point(
+    data = as.data.frame(Pcal_res_table_U_R) %>%
+      filter(padj < 0.01 & abs(log2FoldChange) > 1), 
+    aes(x = log2FoldChange, y = -log10(padj)), 
+    color = "blue") +
+  geom_hline(yintercept = -log10(0.01), linetype = "dashed") +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
+  theme_bw()
+
+# save the volcano plot
+ggsave("output/Pcal_volcanoPlot_U_R.pdf", height = 6, width = 6)
+```
+
+:::: {.bluebox data-latex=""}
+Volcano plots also give us an opportunity to see whether our results look "normal". If we see big lines or streaks of genes all in a row, this might mean we have a lot of duplicated loci in our assembly or that our model doesn't fit our data very well.  
+::::
+
+## Challenge exercises
+
+### Heat map of differentially expressed genes. 
+Another useful visualization tool is a heatmap of gene expression. We used heatmaps above to show correlations between samples. We can also use heatmaps to show expression of significantly DE genes using `heatmap()`. Heatmaps contain a lot of information, so it is usually a good idea to use a subset of genes that interest you. 
+
+Make a heatmap of the 50 most differentially expressed (lowest p-value) genes: 
+
+- subset the resuls table to only include significantly differentially epxpressed genes using an absolute log2 fold change cutoff of 1 (`abs(log2FoldChange) > 1`) and an adjusted p-value cutoff of 0.01. 
+- create a list of the 50 most differentially expressed gene IDs from your results table
+- subset the VST transformed expression matrix to include only the rows for these 50 genes. 
+- make a heatmap of this subset using `pheatmap. 
+- save your result using the `pdf()` device 
+
+```{r,  class.source = "fold-hide"}
+# Identify the top 50 differentially expressed genes from the sorted results table. 
+DE_genes_df <- Pcal_res_table_U_R %>% 
+  as.data.frame() %>% 
+  rownames_to_column("geneID") %>% 
+  filter(padj  < 0.01 & abs(log2FoldChange) > 1)
+
+DE_genes_top50 <- DE_genes_df$geneID %>% 
+  head(50)
+
+# Extract the expression levels of the most expressed genes from the vst-transformed dds object
+Pcal_vst_DE_top50_U_R <- assay(Pcal_vst)[rownames(Pcal_vst) %in% DE_genes_top50,]
+
+# create the heatmap using baseR heatmap
+heatmap(Pcal_vst_DE_top50_U_R,
+        margin = c(10,6))
+
+# save plot
+pdf(file = "output/Pcal_geneHeatmap_U_R.pdf", height = 6, width = 6)
+heatmap(Pcal_vst_DE_top50_U_R,
+        margin = c(10,6))
+dev.off()
+```
+
+### Identify sub-groups of differentially expressed genes with fuzzy clustering
+
+Subset the VST transformed expression matrix to include only your differentially expressed genes. 
+ 
+```{r, class.source = "fold-hide"}
+
+Pcal_vst_DE_U_R <- assay(Pcal_vst)[rownames(Pcal_vst) %in% DE_genes_df$geneID,]
+```
+
+We are going to use a package called Mfuzz to perform the fuzzy clustering. This requires that we save the matrix in a temporary file before reloading it as an `ExpressionSet` (custom class in R) using the function `table2eset()` 
+
+```{r}
+library(Mfuzz)
+tmp <- tempfile()
+write.table(Pcal_vst_DE_U_R,file=tmp, sep='\t', quote = F, col.names=NA)
+
+#read it back in as an expression set
+dat <- table2eset(file=tmp)
+```
+
+Mfuzz works best when all of the expression values are not only transformed (which ours are) but also scaled to have a mean of 0 using `Mfuzz::scaledata()` on our ExpressionSet. 
+
+```{r}
+dat.s <- standardise(dat)
+
+# you can remove the unscaled expressionSet
+rm(dat)
+```
+
+Fuzzy c-means clustering is similar to kmeans clustering, which assigns genes to a predefined number of clusters based on their expression. But in fuzzy clustering, 
+the membership assignments are allowed a certain amount of fuzziness: genes can be assigned to multiple clusters at once. This means that genes with unclear membership won't have an undue effect on the composition of the clusters to which they are assigned (Schwämmle & Jensen, 2010). 
+
+Calculate the fuzzifier, or the amount of fuzziness that will be allowed when assigning membership using `mestimate()`. 
+
+
+```{r}
+m1 <- mestimate(dat.s)
+m1
+```
+
+We still have to provide the number of clusters we expect to see in the data. We can do this by calculating the minimum centroid distance for a range of clusters. The goal is to minimize both the centroid distance _and_ the number of clusters, so we will choose the inflection point when the decrease in centroid distance is very low for each new cluster. 
+
+```{r}
+Dmin(dat.s, m=m1, crange=seq(2,22,1), repeats=3, visu=TRUE)
+
+# store the value of the inflection point as an object. we will use this in the fuzzy clustering function below. 
+c_estimate <- 3
+
+```
+
+Run the fuzzy clustering analysis. 
+
+```{r}
+
+Pcal_DE_U_R_fcm_results <- mfuzz(dat.s,centers=c_estimate,m=m1)
+```
+
+Plot your results. You _can_ use the built in plotting function `mfuzz.plot2()` which requires your ExpressionSet and your clustering results.
+
+```{r}
+mfuzz.plot2(dat.s, Pcal_DE_U_R_fcm_results)
+```
+
+Or, you can convert your results into a data frame that can be plotted with ggplot. plot the cluster centroids for each sample in `ggplot2`.  
+```{r}
+#get the centroids into a long dataframe:
+Pcal_DE_U_R_fcm_centroids <- Pcal_DE_U_R_fcm_results$centers
+Pcal_DE_U_R_fcm_centroids_df <- data.frame(Pcal_DE_U_R_fcm_centroids)
+Pcal_DE_U_R_fcm_centroids_df$cluster <- row.names(Pcal_DE_U_R_fcm_centroids_df)
+
+Pcal_DE_U_R_centroids_long <- tidyr::pivot_longer(Pcal_DE_U_R_fcm_centroids_df, 
+                                      names_to = "sampleName", 
+                                      values_to = 'value', -cluster) %>%
+  left_join(dplyr::select(Pcal_sampledata, sampleName, condition))
+
+  
+ggplot(Pcal_DE_U_R_centroids_long, 
+       aes(x=sampleName,y=value, group=cluster, color=as.factor(cluster))) +
+  geom_line() +
+  xlab("Condition") +
+  ylab("Expression") +
+  labs(title=paste0("Cluster Expression by sample, c = ",c_estimate),color = "Cluster")+
+  theme_bw()+
+  facet_grid(~condition, scales = "free_x", space = "free_x")+
+  theme(panel.grid = element_blank(), 
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Finally, extract the genes forming the cores of the soft clusters and bind them into a single dataframe. 
+
+```{r}
+Pcal_DE_U_R_acore <- acore(dat.s,Pcal_DE_U_R_fcm_results,min.acore=0)
+Pcal_DE_U_R_acore_df <- do.call(rbind, lapply(seq_along(Pcal_DE_U_R_acore), function(i){ data.frame(CLUSTER=i, Pcal_DE_U_R_acore[[i]])}))
+```
+
+# Unit 3: Gene set enrichment analysis 
+
+Finally, we want to know the **functions** of our differentially expressed genes. We can do this using gene set enrichment analysis (GSEA). I have already generated a functional annotation for our annotated genes using EggNOG-mapper (http://eggnog-mapper.embl.de/), which assigned gene ontology (GO) terms to our genes. 
+
+:::: {.bluebox data-latex=""}
+GO terms provide a unified language for biological processes, molecular functions and cellular components (@GeneOntologyConsortium). Gene ontology is a widely used tool in genomics and transcriptomics but should be interpreted with caution (more on this later.)
+::::
+
+## The functional annotation
+
+Define the path to the functional annotation. We do this instead of loading the data frame directly so we can use the path in a topGO function later on. 
+
+```{r}
+GO_path <- "refs/Pcal_GO_annotation.tsv"
+```
+
+Take a look at the format of the functional annotation. 
+
+```{r}
+#read the go annotation tsv
+GO_annotation <- read_tsv(GO_path, col_names = c("gene_id", "GOterms")) 
+
+# take a look at the first 10 rows
+head(GO_annotation)
+```
+
+For non-model organisms, functional annotations of predicted genes may be incomplete. We can still run a GSEA, but should be aware that only a fraction of our genes (including DE genes) may be represented in our analysis. How many _P. c-album_ genes are annotated with GO terms?
+
+```{r}
+grepl(GO_annotation$GOterms, pattern ="GO") %>% sum()
+```
+
+## GSEA with `topGO`
+
+The package we will use to run the GSEA is `topGO`, which tests GO term enrichment while accounting for GO topology (or, how the GO terms are related to each other). 
+
+GSEA tests whether certain functons are enriched in a set of genes by evaluating whether the number of genes associated with a certain GO term is more than expected by chance given the number of times the GO term appears in the whole set (the gene "universe"). 
+
+Create the "gene universe".
+
+```{r}
+# here I will be only analyzing GO terms with at least 5 members,
+# as this yield more stable results.
+node_size= 5
+
+# We will focus on Biological process terms (BP)
+GO_category="BP"
+
+# use topGO to read the functional annotation
+geneID2GO <- readMappings(GO_path)
+
+# define the gene universe
+geneUniverse <- names(geneID2GO)
+```
+
+### Extract gene sets of interest
+
+We will perform two GSEAs, one each for genes that are upregulated or downregulated on _Urtica_ relative to _Ribes_ using a significance cutoff of 0.01 and an LFC threshold of 1 or -1.
+
+Create lists of genes that are upregulated (`up_U_R`) and downregulated (`down_U_R`) by extracting the row names from your results table only for genes that meet our significance and LFC thresholds. How many genes are in each candidate list?
+
+```{r,  class.source = "fold-hide"}
+up_U_R <- rownames(Pcal_res_table_U_R %>% 
+                           data.frame() %>%
+                           filter(padj < 0.01 & log2FoldChange > 1))
+
+down_U_R <- rownames(Pcal_res_table_U_R %>%
+                             data.frame() %>% 
+                             filter(padj < 0.01 & log2FoldChange < -1))
+
+# save your gene lists!
+```
+
+:::: {.bluebox data-latex=""}
+Generally, GSEA is best applied to an intermediately-sized gene set. Too small, it is unlikely that any GO term will occur often enough to be enriched. Instead, you can easily look at the genes themeselves and make conclusions about their functions. Too large relative to the annotated gene universe and terms will occur in the list just as often as expected...  because you've sampled all the genes!
+::::
+
+### Functional enrichment of down-regulated genes
+
+Run the GSEA for the downregulated gene set. 
+
+```{r}
+genesOfInterest.bv <- down_U_R
+
+geneList.bv <- factor(as.integer(geneUniverse %in% genesOfInterest.bv))
+names(geneList.bv) <- geneUniverse
+
+# Create a new topGO GSEA object
+myGOdata.bv <- new("topGOdata",
+                   description="Candidate genes", 
+                   ontology=GO_category, 
+                   allGenes=geneList.bv, 
+                   annot = annFUN.gene2GO, 
+                   gene2GO = geneID2GO, 
+                   nodeSize = node_size)                                       
+```
+
+Now, run the statistical analysis for each term. Here, we will run a classical Fisher's exact test and a fisher's exact test corrected using `topGO`'s parent-child algorithm. This algorithm evaluates enrichment of a term in relation to its parent terms and so reduces false positives due to the "inheritance" problem -- where more specific terms are likely to be falsely enriched if their parent terms are enriched (Grossmann et al. 2007) 
+
+Run two statistical tests in `topGO` using the function `runTest()` with the option `statistic="fisher"`. First ,run the classic Fisher's exac test using the option `algorithm = "classic"`. Then, run the parent-child algorithm (algorithm = "parentchild"). 
+
+```{r}
+# classic Fisher
+resultClassic <- runTest(myGOdata.bv, algorithm="classic", statistic="fisher")
+
+# Fisher with parent-child algorithm
+resultParentchild <- runTest(myGOdata.bv, algorithm="parentchild", statistic="fisher")
+```
+
+Generate a results table for the significantly enriched GO terms using the parent-child algorithm.
+
+```{r}
+# Create a GSEA results table
+# GenTable() is  annoying and requires a number of terms we want reported (default is 10)
+## so we leverage our topGOresult object
+top_nodes <-  sum(resultParentchild@score < 0.05)
+
+allRes_BP_down_U_R <- GenTable(myGOdata.bv,
+                   classicFisher = resultClassic,
+                   parentchildFisher = resultParentchild,
+                   orderBy = "parentchildFisher",
+                  topNodes = top_nodes)
+```
+
+What are the most enriched biological processes in genes that are down-regulated in _Urtica_ relative to _Ribes_? Use head() to look at the top 20 genes. P-values for each GO term are listed under the relevant test (`classicFisher`, `parentchildFisher`). Are the classic results different from the parent-child results? 
+
+```{r, class.source = "fold-hide"}
+head(allRes_BP_down_U_R, 20)
+```
+
+### Visualizing GSEA
+
+One common way of showing enriched terms is using a dot plot.  
+
+```{r} 
+# subset the results table 
+allRes_BP_down_U_R_top15 <- allRes_BP_down_U_R %>% 
+  mutate(GO.term = paste(GO.ID, Term, sep = ": "),
+         parentchildFisher = as.numeric(parentchildFisher)) %>% 
+  arrange(parentchildFisher) %>% 
+  head(15)
+
+# plot the subsetted results
+# points are scaled by the tota number of genes that are annotated with each term term, which gives us an idea of how broad or specific a term is. 
+
+ggplot(allRes_BP_down_U_R_top15, aes(x = forcats::fct_reorder(GO.term, -log10(parentchildFisher)), GO.term, y = -log10(parentchildFisher) ))+
+  geom_point(aes(size = Annotated)) +
+  labs(x = "GO term and function", y = expression(-log[10]~"(p-value)")) +
+  coord_flip() +
+  theme_bw()
+
+# save your GO term plot
+
+ggsave("output/allRes_BP_down_U_R_top15_dotplot.pdf")
+```
+
+Finally, we can visualize the parent-child relationships of the most significantly enriched terms. 
+
+```{r} 
+
+# Rgraphviz needs to be installed and loaded to build this plot
+library(Rgraphviz) 
+showSigOfNodes(myGOdata.bv, score(resultParentchild), firstSigNodes = 15, useInfo = 'all')
+
+```
+
+Rectangles indicate the 5 most significant terms. Rectangle color represents the relative significance (yellow = low, red = high). Within each node shape is listed the identifier and a trimmed GO name, and the _raw_ p-value, the number of significant genes and the total number of genes annotated to the respective GO term.
+
+## Challenge activities
+
+### Functional enrichment of upregulated genes
+
+Modifying the code above, perform a GSEA on the genes that are up-regulated in _Urtica_ relative to _Ribes_, then plot the results in a dot plot and save the plot 
+
+```{r, class.source = "fold-hide"}
+genesOfInterest.bv <- up_U_R
+
+geneList.bv <- factor(as.integer(geneUniverse %in% genesOfInterest.bv))
+names(geneList.bv) <- geneUniverse
+
+# Create a new topGO GSEA objected
+myGOdata.bv <- new("topGOdata",
+                   description="Candidate genes", 
+                   ontology=GO_category, 
+                   allGenes=geneList.bv, 
+                   annot = annFUN.gene2GO, 
+                   gene2GO = geneID2GO, 
+                   nodeSize = node_size)                                       
+
+# classic Fisher
+resultClassic <- runTest(myGOdata.bv, algorithm="classic", statistic="fisher")
+
+# Fisher with parent-child algorithm
+resultParentchild <- runTest(myGOdata.bv, algorithm="parentchild", statistic="fisher")
+
+# Create a GSEA results table
+top_nodes <-  sum(resultParentchild@score < 0.05)
+allRes_BP_up_U_R <- GenTable(myGOdata.bv,
+                   classicFisher = resultClassic,
+                   parentchildFisher = resultParentchild,
+                   orderBy = "parentchildFisher",
+                  topNodes = top_nodes)
+
+# subset the results table 
+allRes_BP_up_U_R_top15 <- allRes_BP_up_U_R %>% 
+  mutate(GO.term = paste(GO.ID, Term, sep = ": "),
+         parentchildFisher = as.numeric(parentchildFisher)) %>% 
+  arrange(parentchildFisher) %>% 
+  head(15)
+
+# plot the subsetted results
+# points are scaled by the tota number of genes that are annotated with each term term, which gives us an idea of how broad or specific a term is. 
+
+ggplot(allRes_BP_down_U_R_top15, aes(x = forcats::fct_reorder(GO.term, -log10(parentchildFisher)), GO.term, y = -log10(parentchildFisher) ))+
+  geom_point(aes(size = Annotated)) +
+  labs(x = "GO term and function", y = expression(-log[10]~"(p-value)")) +
+  coord_flip() +
+  theme_bw()
+
+# save your GO term plot
+
+ggsave("output/allRes_BP_down_U_R_top15_dotplot.pdf")
+
+```
+
+### Molecular functions
+
+Fewer genes tend to be annotated with molecular functions than biological processes, so we have less power to detect signifcant enrichment when using these terms. Nevertheless, they can be interesting when trying to understand the roles of up and down regulated genes. 
+
+Repeat the GSEA for the up and down-regulated genes, but this time test the molecular functions (`GO_category="MF"`). Can you run it as a for-loop? 
+
+```{r, class.source = "fold-hide"}
+# Starting with BP
+GO_category="MF"
+
+DEgenes_list <- list(down_U_R, up_U_R)
+names(DEgenes_list) <- c("down_U_R", "up_U_R")
+
+for (i in 1:2){
+  # define candidate list
+  genesOfInterest.bv <- DEgenes_list[[i]]
+  
+  # placing this within brackets causes all the lines to run in a single block
+  # it can help you keep track of code that you usually run together
+  
+  geneList.bv <- factor(as.integer(geneUniverse %in% genesOfInterest.bv))
+  names(geneList.bv) <- geneUniverse
+  
+  # Create a new topGO GSEA objected
+  myGOdata.bv <- new("topGOdata",
+                     description="Candidate genes", 
+                     ontology=GO_category, 
+                     allGenes=geneList.bv, 
+                     annot = annFUN.gene2GO, 
+                     gene2GO = geneID2GO, 
+                     nodeSize = node_size)                                       
+  
+  # classic Fisher
+  resultClassic <- runTest(myGOdata.bv, algorithm="classic", statistic="fisher")
+  
+  # Fisher with parent-child algorithm
+  resultParentchild <- runTest(myGOdata.bv, algorithm="parentchild", statistic="fisher")
+ top_nodes <-  sum(resultParentchild@score < 0.05)
+  # Create a GSEA results table
+  temp <- GenTable(myGOdata.bv,
+                   classicFisher = resultClassic,
+                   parentchildFisher = resultParentchild,
+                   orderBy = "parentchildFisher",
+                   topNodes = top_nodes)
+  assign(paste0("allRes_MF_", names(DEgenes_list)[[i]]), temp)
+}
+
+head(allRes_MF_down_U_R)
+head(allRes_MF_up_U_R)
+
+```
+
+# The big challenge: running a second contrast
+
+## _Urtica_ vs. _Salix_
+
+We know what genes are differentially expressed between _Urtica_ and _Ribes_ but still don't know how the third host plant, _Salix_ fits into the picture. 
+
+Repeat the differential expression analysis. This time, compare expression between larvae reared on _Urtica_ and _Salix_. Remember from `resultsNames(Pcal_dds)` that this was not one of the comparisons tested in our current dds object. To deal with this, we need to _relevel_ the host plants within the condition variable and refit the DESeq model. 
+
+For a hint on re-leveling condition: 
+
+```{r,  class.source = "fold-hide"}
+# relevel condition
+Pcal_dds$condition <- relevel(Pcal_dds$condition, "Salix") 
+
+# refit the model
+Pcal_dds <- DESeq(Pcal_dds)
+
+# Check your work!
+# Is the right contrast there? 
+resultsNames(Pcal_dds)
+```
+
+
+Try to do it on your own first, and compare to the code in the drop down if you need some help along the way: 
+
+Extract the results for _Urtica_ vs. _Salix_. 
+
+```{r,  class.source = "fold-hide"}
+# specify the contrast by naming the factor you want to test 
+# and the levels of the factor you want to compare.
+contrast_U_S <- c("condition", "Urtica", "Salix")
+
+# extract the results for your specified contrast
+Pcal_res_table_U_S <- results(Pcal_dds, contrast=contrast_U_S)
+
+# sort results based on the padj
+Pcal_res_table_U_S <- Pcal_res_table_U_S[order(Pcal_res_table_U_S$padj),]
+
+# save your results 
+write_tsv(as.data.frame(Pcal_res_table_U_S), "output/Pcal_res_table_U_S.tsv")
+```
+
+Visualize differential expression. Can you try adding labels to the 20 most significantly DE genes in your volcano plot? 
+
+```{r,  class.source = "fold-hide"}
+# MA plot needs the dds object
+pdf(file = "output/Pcal_MAplot_U_S.pdf", height = 6, width = 6)
+plotMA(object = Pcal_dds, 
+       ylim=c(-2,2), 
+       alpha = 0.01)
+dev.off()
+
+# code to add labels shown in comments:
+
+# install.packages("ggrepel")
+# library(ggrepel)
+# top15_labs <- head(Pcal_res_table_U_S,20) %>%
+#   as.data.frame() %>% 
+#   rownames_to_column("gene_id")
+
+ggplot() +
+  # geom_text_repel(data = top15_labs, 
+  #                 aes(x = log2FoldChange, y = -log10(padj), label = gene_id), size = 2)+
+  geom_point(
+    data = as.data.frame(Pcal_res_table_U_S) %>% filter(padj > 0.01 | abs(log2FoldChange) < 1), 
+    aes(x = log2FoldChange, y = -log10(padj)),
+    color = "grey") +
+  geom_point(
+    data = as.data.frame(Pcal_res_table_U_S) %>% filter(padj < 0.01 & abs(log2FoldChange) > 1), 
+    aes(x = log2FoldChange, y = -log10(padj))) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
+  theme_bw()
+
+# save the volcano plot
+ggsave("output/Pcal_volcanoPlot_U_S.pdf", height = 6, width = 6)
+```
+
+Make a heatmap of the 20 most differentially expressed (lowest p-value) genes. 
+
+```{r,  class.source = "fold-hide"}
+# Identify the top 20 differentially expressed genes from the sorted results table. 
+DE_genes <- rownames(head(Pcal_res_table_U_S,50))
+
+# Create a heatmap for the most expressed genes
+Pcal_dds_DE_U_S <- assay(Pcal_vst)[rownames(Pcal_vst) %in% DE_genes,]
+
+heatmap(Pcal_dds_DE_U_S,
+        margin = c(10,6))
+
+# save plot
+pdf(file = "output/Pcal_geneHeatmap_U_S.pdf", height = 6, width = 6)
+heatmap(Pcal_dds_DE_U_S,
+        margin = c(10,6))
+dev.off()
+```
+
+Run a functional annotation on the up and downregulated genes. You do not need to load the annotation  again. Go straight to the candidate gene list steps (But don't forget to indicate the correct GO category).
+
+```{r, class.source = "fold-hide"}
+# Starting with BP
+
+up_U_S <- rownames(Pcal_res_table_U_S %>% 
+                           data.frame() %>%
+                           filter(padj < 0.01 & log2FoldChange > 1))
+
+down_U_S <- rownames(Pcal_res_table_U_S %>%
+                             data.frame() %>% 
+                             filter(padj < 0.01 & log2FoldChange < -1))
+
+DEgenes_list <- list(down_U_S, up_U_S)
+names(DEgenes_list) <- c("down_U_S", "up_U_S")
+
+for (k in c("BP", "MF")) {
+  
+  GO_category=k
+  
+  for (i in 1:2){
+    # define candidate list
+    genesOfInterest.bv <- DEgenes_list[[i]]
+    
+    # placing this within brackets causes all the lines to run in a single block
+    # it can help you keep track of code that you usually run together
+    
+    geneList.bv <- factor(as.integer(geneUniverse %in% genesOfInterest.bv))
+    names(geneList.bv) <- geneUniverse
+    
+    # Create a new topGO GSEA objected
+    myGOdata.bv <- new("topGOdata",
+                       description="Candidate genes", 
+                       ontology=GO_category, 
+                       allGenes=geneList.bv, 
+                       annot = annFUN.gene2GO, 
+                       gene2GO = geneID2GO, 
+                       nodeSize = node_size)                                       
+    
+    # classic Fisher
+    resultClassic <- runTest(myGOdata.bv, algorithm="classic", statistic="fisher")
+    
+    # Fisher with parent-child algorithm
+    resultParentchild <- runTest(myGOdata.bv, algorithm="parentchild", statistic="fisher")
+    top_nodes <-  sum(resultParentchild@score < 0.05)
+    # Create a GSEA results table
+    temp <- GenTable(myGOdata.bv,
+                     classicFisher = resultClassic,
+                     parentchildFisher = resultParentchild,
+                     orderBy = "parentchildFisher",
+                     topNodes = top_nodes)
+    assign(paste0("allRes_", GO_category, "_", names(DEgenes_list)[[i]]), temp)
+  }
+}
+
+head(allRes_BP_down_U_S)
+head(allRes_BP_up_U_S)
+head(allRes_MF_down_U_S)
+head(allRes_MF_up_U_S)
+
+```
+
+## Compare DE genes
+
+Are the same genes differentially expressed between _Urtica_ and each of the other two host plants? Compare the results from the _Urtica_ v. _Ribes_ and _Urtica_ v. _Salix_ analyses visually. You can use venn diagrams (e.g., `gplots`), euler diagrams (`eulerr`), upsetR plots (e.g., `upsetR`, `ComplexHeatmap`), alluvial plots (`ggalluvial`), scatterplots (e.g., `ggplot2`). 
+
+What about the functional enrichment? Can you use the same tools to visualize functional overlap (i.e., GO terms) of the DE genes in the two contrasts? 
+
+You may need to install some packages. I didn't write any hints for this part! Use google, package manuals and R help to produce the code. 
+
+```{r, echo = F, class.source = "fold-hide", fig.height = 5, fig.width = 5}
+
+# I find it easier to work with the gene lists wihtin a larger list
+all_DE_genes <- list(down_genes_U_R = down_U_R, 
+                      up_genes_U_R = up_U_R, 
+                      down_genes_U_S = down_U_S, 
+                      up_genes_U_S= up_U_S)
+
+# install.packages("gplots")
+library(gplots)
+# ??gplots::venn
+gplots::venn(all_DE_genes)
+
+```
+```{r, echo = F, class.source = "fold-hide", fig.height = 5, fig.width = 5}
+# install.packages("eulerr")
+library(eulerr)
+
+# ??eulerr::euler
+plot(euler(all_DE_genes, shape = "ellipse"), quantities = T)
+
+# because eulerr uses numerical optimization to approximate overlaps, it will sometimes exclude certain overlaps in favor of a more optimized diagram. Not always useful... 
+
+```
+
+```{r, echo = F, class.source = "fold-hide", fig.height = 3, fig.width = 5}
+# install.packages("eulerr")
+
+# ??gplots ::venn
+library(ComplexHeatmap)
+m1 <- make_comb_mat(all_DE_genes)
+ComplexHeatmap::UpSet(m1)
+
+```
+
+```{r, echo = F, class.source = "fold-hide", fig.height = 5, fig.width = 5}
+# install.packages("ggalluvial")
+
+# ggalluvial requires a specific dataframe format
+
+names(all_DE_genes)
+
+#create a dataframe to fill with our new data
+all_DE_genes_df <- data.frame()
+for (i in 1:length(all_DE_genes)) {
+  temp <- data.frame(gene_id = all_DE_genes[[i]]) %>% 
+    mutate(listName = names(all_DE_genes)[i], 
+           DE = TRUE) %>% 
+    separate(listName, sep = "_genes_", into = c("dir", "contrast")) 
+all_DE_genes_df <- rbind(all_DE_genes_df, temp)
+}
+all_DE_genes_df_alluvial <- all_DE_genes_df %>% 
+  pivot_wider(names_from = contrast, values_from = DE, values_fill = FALSE) %>% 
+  mutate(U_R_alluvial = factor(if_else(U_R == TRUE,dir, "not DE"), 
+                               levels = c("down", "up", "not DE")),
+         U_S_alluvial = factor(if_else(U_S == TRUE, dir, "not DE"),  
+                               levels = c("down", "up", "not DE"))) %>% 
+  group_by(U_R_alluvial, U_S_alluvial) %>% 
+  summarise(Freq = n())
+
+head(all_DE_genes_df_alluvial)
+library(ggalluvial)
+# vignette(topic = "ggalluvial", package = "ggalluvial")
+
+#check data match alluvial format
+is_alluvia_form(all_DE_genes_df_alluvial, axes = 1:2, silent = TRUE)
+
+ggplot(all_DE_genes_df_alluvial,
+       aes(y = Freq, axis1 = U_R_alluvial, axis2 = U_S_alluvial)) +
+  geom_alluvium(aes(fill =U_R_alluvial), width = 1/12) +
+  geom_stratum(width = 1/12, fill = "black", color = "grey") +
+  geom_label(stat = "stratum", aes(label = after_stat(stratum)),
+             reverse = T) +
+  scale_fill_manual(values = c("blue", "red", "darkgrey"))+
+  
+  scale_x_discrete(limits = c("U v. R", "U v. S"), expand = c(.05, .05)) 
+
+```
+```{r, echo = F, class.source = "fold-hide", fig.height = 5, fig.width = 5}
+
+#for ease, define a negation of  %in% 
+`%notin%` = Negate(`%in%`)
+
+
+# to build a scatterplot, we have to join the tables
+Pcal_res_df_U_R_S <- full_join(
+  as.data.frame(Pcal_res_table_U_R) %>% rownames_to_column("gene_id") %>%
+    select(gene_id, lfc_U_R = log2FoldChange, padj_U_R = padj),
+  as.data.frame(Pcal_res_table_U_S) %>% rownames_to_column("gene_id") %>%
+    select(gene_id, lfc_U_S = log2FoldChange, padj_U_S = padj)) %>%
+  mutate(sigDE = factor(
+    case_when(padj_U_R < 0.01 & padj_U_S < 0.01 & abs(lfc_U_R) > 1 & abs(lfc_U_R) ~ "both",
+              padj_U_R < 0.01 & abs(lfc_U_R) > 1 ~ "U_R only", 
+              padj_U_S < 0.01 & abs(lfc_U_S) > 1 ~ "U_S only", 
+              .default = "not DE"),
+    levels = c("both", "U_S only", "U_R only", "not DE")))
+    
+ggplot(arrange(Pcal_res_df_U_R_S, desc(sigDE)), aes(x = lfc_U_R, y = lfc_U_S, color = sigDE)) +
+        geom_point(alpha = 0.5)+
+  scale_color_manual(values = c("goldenrod", "steelblue", "firebrick", "darkgrey"), breaks = c("both",  "U_S only", "U_R only", "not DE")) +
+  theme_bw()
+
+
+```
+
+# Other great resources:
+
+* Stark, et al. 2019. RNA sequencing: the teenage years. Nature Reviews Genetics 20: 631-656. https://www.nature.com/articles/s41576-019-0150-2
+* Conesa et al. 2016. A survey of best practices for RNA-seq data analysis. Genome Biology 17: 13. https://doi.org/10.1186/s13059-016-088
+
+
+# References
+Grossman et al. 2007. Improved detection of overrepresentation of Gene-Ontology annotations with parent–child analysis. Bioinformatics 23: 3024-3031. https://doi.org/10.1093/bioinformatics/btm440
