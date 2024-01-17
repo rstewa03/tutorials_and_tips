@@ -9,4 +9,4 @@ These are tutorials I have developed or modified for different courses and works
 
 ## Other
 
-- Quick and dirty linear modeling and hierarchical model selection
+- DiversityLinearMods: Quick and dirty linear modeling and hierarchical model selection using alpha diversity data
