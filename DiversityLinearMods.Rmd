@@ -1,0 +1,331 @@
+---
+title: "Speed-intro to linear models "
+author: "Rachel Steward"
+date: "2023-05-31"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE) 
+```
+
+# Load packages
+```{r, eval = T, echo = T, include = T, message=F}
+# load libraries
+library(tidyverse)
+```
+
+# Load & join data
+```{r, eval = T, echo = T, include = T}
+raw_counts <- read_table("family_count.txt", 
+                         col_names= c("sample_id", "count"), 
+                         col_types = "cd")
+metadata <- read_table("all.pops.metadata.tsv", 
+                       col_types = "cffff")
+full_counts <- full_join(metadata, raw_counts)
+```
+
+# What is a linear model? 
+
+- A linear model asks the question: is variable X related to variable Y? or, does variable X _predict_ variable Y?
+- Often, we refer to variable X as a _predictor_ and Y as a _response._
+- We can have several predictors in a model (do variables X and Z predict variable Y). 
+- We can even test whether several predictors interact to produce different effects: (does variable X predict variable Y differenty depending on variable Z?)
+
+# How to fit a good model
+
+- First, we need to decide on the distribution.
+  - A _linear_ model always has a gaussian (normal) distribution. 
+  - A _generalized linear_ model can have a different distribution, and you should choose the distribution depending on your data. For example, RNAseq data are counts of reads, where we might have many many reads but a low chance of them matching any of our genes. Also, the mean of these counts is not equal to the variance of the counts. Together, these characteristics fit a negative binomial distribution. 
+
+- Here, we are going to stick with a simple linear model. 
+
+- The next thing we want to do is determine how many predictors should be in the best fitting model. 
+
+  - The best fitting model is the **smallest** model (fewest effects) that is **NOT significantly different** than the **biggest** model (also called the full model). 
+
+  - To find the smallest model, we perform _hierararchical model simplification_: start with the biggest model and remove terms until suddenly we hit one that significantly affects model fit. 
+
+# Fit the full model
+
+Here, we want to test the interacting effects of host plant, transect and host range. 
+
+- you can think of this like creating a new group for each possible combination of these variables
+  - for example, you have a group for _C oleraceum_ east allopatric, _C oleraceum_ east sympatric, _C oleraceum_ west alloptric...
+  - you might notice, that for our experimental design, these groups are analogous to our populations: COLI, COES, COGE...
+
+Here is what the full model looks like:
+
+```{r, eval = T, echo = T, include = T}
+F_rich1 <- lm(count ~ hostplant + transect + hostrange + # all main effects
+             hostplant:transect + hostplant:hostrange + transect:hostrange + # all two-way interaction effects
+             hostplant:transect:hostrange, # all three-way interaction effects
+           data = full_counts)
+```
+
+In this model, we are most interested in `hostplant:transect:hostrange`, which describes the _three-way_ interaction between our variables. 
+
+- However, any time we test an interaction, we have to include ALL of its component parts. 
+  - the three-way interaction breaks down into all of the two way interactions
+  - all of the two-way interactions break down into the main effects
+
+Another way to write this model is:
+```{r, eval = T, echo = T, include = T}
+F_rich1 <- lm(count ~ hostplant * transect * hostrange, 
+          data = full_counts)
+```
+
+The `*` implies we want to test all three-way interaction effects, _and_ all two-way interactions and main effects that are components of this three-way interaction. 
+
+## Examine the model 
+When we run the model, we can see the results a few different ways:
+
+### We can look at the coefficients for each of the effects. 
+
+```{r, eval = T, echo = T, include = T}
+print(F_rich1)
+```
+
+### We can also look at diagnostic plots for this model. 
+
+```{r, eval = T, echo = T, include = T}
+plot(F_rich1) 
+```
+
+This outputs 4 plots: 
+
+- plot 1 "Residuals vs Fitted". 
+  - This tests whether the residuals of the model are normally distributed with respect to the fitted values
+    - what are residuals? imagine you have a scatterplot and a line-of-best-fit across it. the residual is the vertical distance between a plotted value and the line. 
+  - we have some expectations about residuals of linear models. 
+    - They should be normally distributed, meaning that when we look across the fitted values, the residuals should be evenly distributed above and below 0
+
+- plot 2: "Normal Q-Q": 
+  - qq stands for quantile-quantile, and this tests whether the fitted values and the actual values come from the same distribution
+  - this means that the same proportion of the data are expected to fall in the 5% quantile in both sets of values
+  - basically, it should form a straight line
+  - if it is super curvy, it is not a good match
+    - in fact the curve at the bottom and top end of `plot(F_rich)` qqplot is a little worse than we would generally like
+
+- plot 3 & 4 are checking for outliers. 
+  -labeled points might affect the fit of the model more than other points, which we generally want to avoid. 
+
+### Finally, we can run an analysis of variance (ANOVA). 
+
+```{r, eval = T, echo = T, include = T}
+anova(F_rich1)
+```
+
+- The ANOVA checks the significance of the various model terms. 
+- Here, we can see that the three-way interaction is NOT significant (p > 0.05)
+  - this tells us that the best model **does not** include the the three-way interaction
+
+# Fit a smaller model
+Remember, the goal is to find the SMALLEST model. The three-way interaction does not seem to be important/significant,  so we should write a new, smaller model that excludes it. 
+
+```{r, eval = T, echo = T, include = T}
+F_rich2 <- lm(count ~ hostplant + transect + hostrange + # all main effects
+             hostplant:transect + hostplant:hostrange + transect:hostrange, # all two-way interactions
+           data = full_counts)
+
+# Or, use the * to capture all component effects
+# F_rich2 <- lm(count ~  hostplant * transect + hostplant * hostrange + transect * hostrange,  data = full_counts)
+```
+
+## Compare the models
+Let's make sure that removing this three-way interaction did not actually affect the fit of the model. We can do this using `anova()` again, but now we give it two models:
+
+```{r, eval = T, echo = T, include = T}
+anova(F_rich2, F_rich1)
+```
+The important parts of this result are:
+
+- The **F** statistic: 0.0106
+  - this is the actual test statistic for the ANOVA and should always be reported when comparing models
+- The degrees of freedom (**Df** or df): 1, 88
+  - the first number describes the difference in terms between the models
+  - the second number describes degrees of freedom considering all the coefficients in the larger model. Look at the output of `print(F_rich1)` and count the number of coefficients (=8). This second df is calculated as the total samples - the number of coefficients in the larger model (96 - 8 = 88)
+- the p-value, **Pr(>F)**: 0.9184. 
+  - here, we will consider p < 0.05 as significant. 
+ 
+In the comparison of the two models, we can see that the p-value is very close to what we calculated above (`anova(F1_rich)`). 
+
+- this confirms that the difference between the fit of the models is not significant and that the smaller model is likely better. 
+
+# Fit a series of simplified models
+
+Now we want to apply this process sequentially to find the smallest model that is not significantly different than the full model. 
+
+So we check our model terms:
+
+```{r, eval = T, echo = T, include = T}
+anova(F_rich2)
+```
+
+We should evaluate the two-way interactions first. Here, the _least significant_ of the two-way interactions is `hostplant:hostrange`, so let's remove it!
+
+### Remove the _least_ significant term 
+
+```{r, eval = T, echo = T, include = T}
+F_rich3 <- lm(count ~ hostplant + transect + hostrange + # all main effects
+             hostplant:transect + transect:hostrange, # all two-way interactions
+           data = full_counts)
+
+# alternative:
+# F_rich2 <- lm(count ~ hostplant*transect +  transect*hostrange, data = full_counts) # all two-way interactions and their component main effects
+```
+
+### Compare the models
+
+```{r, eval = T, echo = T, include = T}
+anova(F_rich2, F_rich3)
+```
+### Check which term to remove 
+```{r, eval = T, echo = T, include = T}
+anova(F_rich3)
+```
+### Repeat!
+
+```{r, eval = T, echo = T, include = T}
+# 1. remove hostplant:transect
+F_rich4 <- lm(count ~ hostplant + transect + hostrange +
+            transect:hostrange, 
+           data = full_counts)
+
+# alternative:
+# F_rich2 <- lm(count ~ hostplant + transect*hostrange, data = full_counts) 
+#note we now have to specifically include host plant, because it isn't part of the two-way interaction
+
+# 2. compare the models
+anova(F_rich3, F_rich4)
+
+# 3. evaluate remaining terms
+anova(F_rich4)
+```
+
+```{r, eval = T, echo = T, include = T}
+# 1. remove ransect:hostrange
+F_rich5 <- lm(count ~ hostplant + transect + hostrange, 
+           data = full_counts)
+
+# alternative:
+# F_rich2 <- lm(count ~ hostplant + transect + hostrange, data = full_counts) 
+# we now have only the main effects. 
+
+# 2. compare the models
+anova(F_rich4, F_rich5)
+
+# 3. evaluate remaining terms
+anova(F_rich5)
+```
+
+**STOP! **
+
+Let's look at those results some more. We have two significant terms (`hostrange`, `transect`) and one marginally nonsignificant (0.05 < p < 0.10) term (`hostplant`). 
+
+This is very interesting, but we should still check to see what the consequence of removing the nonsignificant term is. 
+
+```{r, eval = T, echo = T, include = T}
+# 1. remove ransect:hostrange
+F_rich6 <- lm(count ~ transect + hostrange, 
+           data = full_counts)
+
+# alternative:
+# F_rich2 <- lm(count ~ hostplant + transect + hostrange, data = full_counts) 
+# we now have only the main effects. 
+
+# 2. compare the models
+anova(F_rich5, F_rich6)
+
+# 3. evaluate remaining terms
+anova(F_rich6)
+```
+
+# Compare all models
+
+It looks like `F_rich6` could be our best model, but we have a couple other metrics to use. In particular, we want to find the model with the smallest maximum log-likelihood. To do this we use a metric called Akaike's information criterion (AIC) and a version of AIC that uses a Bayesian approach and takes into account the number of observations, the Bayesian information criterion (BIC). 
+
+```{r, eval = T, echo = T, include = T}
+AIC(F_rich1, F_rich2, F_rich3, F_rich4, F_rich5, F_rich6)
+```
+We see that the model with the lowest AIC is `F_rich5`, the one that includes the marginally nonsignficant term `hostplant`. 
+
+```{r, eval = T, echo = T, include = T}
+BIC(F_rich1, F_rich2, F_rich3, F_rich4, F_rich5, F_rich6)
+```
+
+The BIC for `F_rich6` is lowest, but not by much. In this case, I think it is more informative to consider **`F_rich5`** as the best fitting model. It sucks when our criteria don't align, but it is most important to be able to make biological conclusions. 
+
+Let's also check the model fit to make sure there aren't any major problems:
+
+```{r, eval = T, echo = T, include = T}
+plot(F_rich5)
+```
+
+Looks pretty good. Sample row 61 (`full_counts$sample_id[61]`), 60 and 84 might be a little problematic, but they are not way above or below our other points, so it doesn't seem justifiable to remove them. 
+
+# Making biological conclusions from our model
+
+If we look at the results, both host range and transect seem to have a significant effect on family richness, while host plant has a marginally nonsignificant effect. If we look at the coefficients we can make a clearer statement:
+
+```{r, eval = T, echo = T, include = T}
+print(F_rich5)
+```
+- Family richness was lower in the west than in the east. 
+- Family richness was lower in allopatric than in sympatric host ranges. 
+- Family richness tended to be higher in the _C. oleraceum_ ecotype flies than in the _C. heterophyllum_ ecotype.
+  - we say _tended to be_ because we know that this effect did not quite meet our cutoff for significance. 
+ 
+# Write a text summary of the results
+
+The best supported model for family richness in _T. conura_ microbiomes included the main effects of host range, transect and host plant (Table S3). Family richness was significantly lower in the west than in the east (ANOVA, F = 4.1115, df = 1, 92 , p = 0.045486) and in allopatric compared to sympatric host ranges (ANOVA, F = 8.1906, df = 1, 92 , p = 0.005213). Family richness tended to be higher in the _C. oleraceum_ ecotype than in the _C. heterophyllum_ ecotype, although this effect was not quite significant (ANOVA, F = 3.6550, df = 1, 92 , p = 0.059012). 
+
+- Note that we briefly explain the best-fit model and reference the table where the reader can find the full comparison, then we address the terms in the model one by one and state the direction of the effect and include the statistics in parentheses. 
+
+# Family shannon diversity  model simplification
+```{r, eval = T, echo = T, include = T}
+shannon_F <- read_table("shannon_alpha_F.txt", 
+                         col_names= c("sample_id", "shannon"), 
+                         col_types = "cd")
+
+full_shannon_F <- full_join(metadata, shannon_F)
+
+
+F_shan1 <- lm(shannon ~ hostplant * transect * hostrange, data = full_shannon_F)
+anova(F_shan1)
+
+# drop 3way interaction
+F_shan2 <- lm(shannon ~ hostplant * transect + hostplant* hostrange + transect * hostrange, data = full_shannon_F)
+anova(F_shan2)
+
+# drop hostplant*transect
+F_shan3 <- lm(shannon ~  hostplant* hostrange + transect * hostrange, data = full_shannon_F)
+anova(F_shan3)
+
+# drop hostplant* hostrange
+F_shan4 <- lm(shannon ~ hostplant + transect * hostrange, data = full_shannon_F)
+anova(F_shan4)
+
+# drop host plant
+F_shan5 <- lm(shannon ~  transect * hostrange, data = full_shannon_F)
+anova(F_shan5)
+
+# drop transect * host range
+F_shan6 <- lm(shannon ~  transect + hostrange, data = full_shannon_F)
+anova(F_shan6)
+
+AIC(F_shan1, F_shan2, F_shan3, F_shan4, F_shan5, F_shan6)
+BIC(F_shan1, F_shan2, F_shan3, F_shan4, F_shan5, F_shan6)
+anova(F_shan2, F_shan1)
+anova(F_shan3, F_shan2)
+anova(F_shan4, F_shan3)
+anova(F_shan5, F_shan4)
+anova(F_shan6, F_shan5)
+
+print(F_shan3)
+```
+
+# Quick summary
+The best fitting model for family-level shannon diversity included the two-way interactions between host plant and host range and between host range and transect. The effect of host range on diversity differed significantly depending on whether flies were sampled in the east or in the west, with sympatric flies having slightly lower diversity than allopatric flies in Western populations (ANOVA, F = 5.4630, df = 1,90, p = 0.02164). There was also a marginally nonsignificant interaction between host plant and host range, with C. heterophyllum ecotypes having slightly lower microbial diversity when sampled from symaptric host ranges compared to allopatric host ranges (ANOVA, F = 3.9431, df = 1,90, p = 0.05011). 
+
