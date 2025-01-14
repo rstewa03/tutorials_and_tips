@@ -1,8 +1,8 @@
 ---
 title: "Analysis of RNAseq data"
-subtitle: "2024 Workshop on Genomics, Cesky Krumlov"
+subtitle: "2025 Workshop on Genomics, Cesky Krumlov"
 author: "RA Steward"
-date: "updated 2024-01"
+date: "updated 2025-01"
 output: 
   html_document:
     number_sections: true
@@ -28,6 +28,7 @@ library(knitr)
 library(gridExtra)
 library(grid)
 library(png)
+library(DESeq2)
 
 adult <- rasterGrob(readPNG("rmd_images/20160703_-_15.25_Gehakkelde_Aurelia_(Polygonia_c-album)_1.png"), interpolate=TRUE)
 larva <- rasterGrob(readPNG("rmd_images/Polygonia_c-album-larva.png"), interpolate=TRUE)
@@ -63,7 +64,7 @@ Today's tutorial walks through a reference-based differential gene expression (D
 
 This tutorial has three units:  
 
- - **Exploring patterns of gene expression among samples **
+ - **Exploring patterns of gene expression among samples**
  - **Identifying differentially expressed genes**
  - **Evaluating functional enrichment of DE gene sets**
  
@@ -75,7 +76,7 @@ Occasional blue boxes give background on the analyses. Feel free to gloss over t
 
 # Unit 1: Exploring patterns of gene expression among samples
 
-Everything in this tutorial will be done in **RStudio**. 
+Everything in this tutorial will be done in **R** preferably using **RStudio**. 
 
 ## Set the working directory
 Open RStudio and start by checking (`getwd()`) and setting (`setwd()`) your working directory. The activity is designed to be run in the `RNAseq_analysis" directory. 
@@ -90,7 +91,7 @@ setwd("/home/genomics/workshop_materials/RNAseq_analysis/")
 
 Alternatively, you can set the working directory using the RStudio interface. Click on the `Files` tab. Navigate by clicking on the directories you want to enter (`workshop_materials`, then `RNAseq_analysis`). Once inside the working directory, use the `More` drop-down menu (next to the little blue gear) and select `Set As Working Directory`. 
 
-Take a look at the contents of the directory and subdirectory. You can do this using the `list.files()` command with the `recursive = T` option. or by selecting `Go To Working Directory` from the `More` drop-down menu on the `Files` tab. 
+Take a look at the contents of the directory and subdirectory. You can do this using the `list.files()` command with the `recursive = T` option, or by selecting `Go To Working Directory` from the `More` drop-down menu on the `Files` tab. 
 
 ```{r, eval = F, class.source = "fold-hide"}
 list.files(recursive = T)
@@ -231,11 +232,11 @@ DGE analysis is designed to deal with count data that is highly variable among s
 - improve model fit
 - reduce the number of multiple comparisons (see below). 
 
-It is not a required step and tools like `DESeq2` can handle the data without filtering first, but it is something to consider. Here, we will set a filter based on an fixed threshold: keep only those genes with at least 5 reads in at least 3 samples. 
+It is not a required step and tools like `DESeq2` can handle the data without filtering first, but it is something to consider. Here, we will set a filter based on a fixed threshold: keep only those genes with at least 5 reads in at least 3 samples. 
 
 ```{r}
 # determine whether genes meet our threshold
-keep <- rowSums(counts(Pcal_dds) >= 5 ) >= 9
+keep <- rowSums(counts(Pcal_dds) >= 5 ) >= 3
 
 # filter the dds object to keep genes that meet the threshold
 Pcal_dds_filt <- Pcal_dds[keep,]
@@ -261,11 +262,17 @@ The main factors considered during normalization are sequencing depth and RNA co
 3. A normalization factor (aka **size factor**) is calculated from the median value of all ratios for each column. 
 4. Normalized count values are calculated using the normalization factor. 
 
-Estimate the size factors for each sample:
+Estimate the size factors for each sample using `estimateSizeFactors()`:
 
 ```{r}
 # Estimate the size factors
 Pcal_dds <- estimateSizeFactors(Pcal_dds) 
+
+```
+
+Use `sizeFactors()` to look at the size factors for each sample. 
+
+```{r}
 sizeFactors(Pcal_dds) # Check the size factors 
 ```
 
@@ -283,7 +290,7 @@ Hierarchical clustering also groups samples by expression similarity. A hierarch
 
 ### Transformation
 
-When using unsupervised clustering methods, transformation of the normalized counts improves the estimated correlations or distances between samples or genes for visualization. `DESeq2` recommends a variance-stabilizing transformation (`vst()`) of the normalized counts.
+When using unsupervised clustering methods, transformation of the normalized counts improves the estimated correlations or distances between samples for visualization. `DESeq2` recommends a variance-stabilizing transformation (`vst()`) of the normalized counts.
 
 ```{r}
 # Transform the data using the variance-stabilizing transformation
@@ -292,6 +299,8 @@ Pcal_vst <- vst(Pcal_dds, blind=TRUE)
 
 :::: {.bluebox data-latex=""}
 Here we have set blind to `TRUE` because we want the transformation to be performed without considering the design formula of the `dds` object. If conditions are expected to be VERY different in their total counts, it is a good idea to change this to `blind == FALSE`.  For example, a pupa in the middle of winter is performing few physiological processes other than homeostasis and has very low transcription. In contrast, a pupa that is right about to emerge as an adult butterfly is undergoing massive morphological and physiological changes and has much higher levels of transcription. In this case, it is better to use `blind == FALSE`. 
+
+A slower option is `rlog()`, or the regularized log transformation. This transformation is recommended when size factors differ a lot between samples. 
 ::::
 
 ### Principal component analysis
